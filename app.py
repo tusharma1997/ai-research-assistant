@@ -4,6 +4,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.tools import tool
+from datetime import datetime
 
 # ==========================================
 # 1. SETUP (Replace with your actual keys)
@@ -35,12 +36,18 @@ def get_agent():
 
     tools = [search_web]
     
+    # Grab today's actual date
+    current_date = datetime.now().strftime("%B %d, %Y")
+
     return create_agent(
         model=llm, 
         tools=tools, 
-        system_prompt="""You are a strict, top-tier research assistant. 
-        CRITICAL INSTRUCTION: You MUST use the search_web tool for ANY questions regarding current events, sports scores, news, weather, or real-time data. 
-        NEVER rely on your internal training data for time-sensitive questions. If asked about today, search the web first. Always cite your sources."""
+        system_prompt=f"""You are a strict, top-tier research assistant. 
+        CRITICAL: Today's exact date is {current_date}. 
+        
+        You MUST use the search_web tool for ANY questions regarding current events, sports scores, news, or weather. 
+        When searching, use the exact date '{current_date}' in your search query to ensure accuracy. 
+        NEVER rely on your internal training data for time-sensitive questions. Always cite your sources."""
     )
 
 agent = get_agent()
