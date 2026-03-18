@@ -1,17 +1,19 @@
 import streamlit as st
 import os
 import httpx
+import json
 from datetime import datetime
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langchain_core.callbacks import BaseCallbackHandler
 
 # ==========================================
 # 1. SETUP & CONFIG
 # ==========================================
-st.set_page_config(page_title="AI Research Assistant", page_icon="🔎")
+st.set_page_config(page_title="AI Research Assistant", page_icon="🔎", layout="wide")
 
-# Use st.secrets with fallback to avoid crashes if keys are missing
+# API Keys from Streamlit Secrets
 OPENAI_KEY = st.secrets.get("OPENAI_KEY")
 TAVILY_KEY = st.secrets.get("TAVILY_KEY")
 
@@ -22,13 +24,20 @@ if not OPENAI_KEY or not TAVILY_KEY:
 os.environ["OPENAI_API_KEY"] = OPENAI_KEY
 
 # ==========================================
-# 2. BUILD THE AGENT & TOOL
+# 2. THE "SPY" (CALLBACK HANDLER)
 # ==========================================
+class SearchDebugHandler(BaseCallbackHandler):
+    """Custom handler to capture tool outputs across threads safely."""
+    def __init__(self):
+        self.search_data = []
 
-# Thread-safe storage for debug data
-if "search_debug" not in st.session_state:
-    st.session_state.search_debug = []
+    def on_tool_end(self, output: str, **kwargs):
+        # When the search tool finishes, save its raw output to a list
+        self.search_data.append(output)
 
+# ==========================================
+# 3. TOOL & AGENT DEFINITION
+# ==========================================
 @tool
 def search_web(query: str) -> str:
     """Use this tool to search the internet for current events, news, and facts."""
@@ -37,29 +46,16 @@ def search_web(query: str) -> str:
         "https://api.tavily.com/search",
         json={"api_key": TAVILY_KEY, "query": query}
     )
-    data = response.json()
-    
-    # 🛠️ Robust Thread-Safe State Handling
-    # Check if we are in a context where session_state is accessible
-    try:
-        if "search_debug" not in st.session_state:
-            st.session_state.search_debug = []
-        st.session_state.search_debug.append({"query": query, "data": data})
-    except Exception:
-        # If session_state is totally unreachable in this thread, 
-        # we skip the debug save to prevent the app from crashing.
-        pass
-        
-    results = [f"Source: {res.get('url')}\nContent: {res.get('content')}" for res in data.get("results", [])]
-    return "\n\n".join(results)
+    # We return the full JSON string so the Callback Handler captures everything
+    return response.text
 
+# Initialize LLM
+custom_client = httpx.Client(verify=False)
+llm = ChatOpenAI(model="gpt-4o", http_client=custom_client, temperature=0)
 tools = [search_web]
 current_date = datetime.now().strftime("%B %d, %Y")
 
-# Create the Agent (No caching to allow dynamic tool/UI updates)
-custom_client = httpx.Client(verify=False)
-llm = ChatOpenAI(model="gpt-4o", http_client=custom_client, temperature=0)
-
+# Build the Agent
 agent = create_agent(
     model=llm, 
     tools=tools, 
@@ -67,67 +63,73 @@ agent = create_agent(
     [CRITICAL CONTEXT]
     Today's exact date is {current_date}. 
     
-    [TOOL EXECUTION RULES]
-    1. MANDATORY SEARCH: You must use the `search_web` tool for any questions regarding current events, live data, prices, or real-time status. Do not guess.
-    
-    [EPISTEMIC STRICTNESS (NO HALLUCINATIONS)]
-    2. STRICT FIDELITY: Base your factual answers EXCLUSIVELY on retrieved search results. If the data is missing, explicitly state: "The search results did not provide this information."
-    3. TEMPORAL AWARENESS: Distinguish clearly between past, ongoing, and scheduled future events based on today's date ({current_date}). NEVER report a scheduled event as completed.
-    
-    [FORMATTING]
-    Always provide links to your sources at the end of your response.
+    [RULES]
+    1. MANDATORY SEARCH: Use `search_web` for any real-time data or facts.
+    2. STRICT FIDELITY: Only answer based on search results. Do not hallucinate.
+    3. SOURCES: You MUST provide clickable markdown links [Title](URL) for your sources at the end.
     """
 )
 
 # ==========================================
-# 3. STREAMLIT UI & MEMORY
+# 4. STREAMLIT UI & SESSION STATE
 # ==========================================
 st.title("🔎 My AI Research Assistant")
-st.caption(f"Today's Date: {current_date} | Powered by GPT-4o & Tavily")
+st.caption(f"Current Date: {current_date} | Powered by GPT-4o & Tavily")
 
-# Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Sidebar for controls
 with st.sidebar:
-    if st.button("Clear Chat History"):
+    st.header("Settings")
+    if st.button("🗑️ Clear Chat History"):
         st.session_state.messages = []
-        st.session_state.search_debug = []
         st.rerun()
-    st.info("Raw search data will appear as an accordion after the agent finishes.")
+    st.divider()
+    st.write("The **Raw Data Accordion** will appear automatically below the AI's response whenever a web search is triggered.")
 
-# Display previous chat messages
+# Display chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ==========================================
-# 4. THE CHAT LOOP
+# 5. THE CHAT LOOP
 # ==========================================
 if prompt := st.chat_input("What should we research today?"):
     
-    # 1. User Message
+    # Add user message to UI and State
     with st.chat_message("user"):
         st.markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # 2. Assistant Response
+    # Assistant Logic
     with st.chat_message("assistant"):
-        with st.spinner("Searching the web and analyzing..."):
-            # Pass memory history into the Agent
-            response = agent.invoke({"messages": st.session_state.messages})
+        # Initialize the handler for THIS specific turn
+        debug_handler = SearchDebugHandler()
+        
+        with st.spinner("Agent is searching and thinking..."):
+            # Run the agent with the callback spy attached
+            response = agent.invoke(
+                {"messages": st.session_state.messages},
+                config={"callbacks": [debug_handler]}
+            )
             
             ai_reply = response["messages"][-1].content
             st.markdown(ai_reply)
-            
-            # 3. Debug Accordion (Rendered safely in the main thread)
-            if st.session_state.search_debug:
-                for debug in st.session_state.search_debug:
-                    with st.expander(f"🔍 Raw Data: {debug['query']}", expanded=False):
-                        st.json(debug['data'])
-                # Clear for the next interaction
-                st.session_state.search_debug = []
 
-    # 4. Save reply to memory
+        # 🐛 THE DEBUG ACCORDION
+        # This is safe because it's in the main thread AFTER invoke() is done
+        if debug_handler.search_data:
+            for i, raw_result in enumerate(debug_handler.search_data):
+                with st.expander(f"🔍 Raw Search Result {i+1}", expanded=False):
+                    try:
+                        # Try to format it as pretty JSON if possible
+                        parsed_json = json.loads(raw_result)
+                        st.json(parsed_json)
+                    except:
+                        # Fallback to plain text if it's not JSON
+                        st.text(raw_result)
+
+    # Save Assistant reply to State
     st.session_state.messages.append({"role": "assistant", "content": ai_reply})
