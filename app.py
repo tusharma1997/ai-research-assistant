@@ -39,8 +39,16 @@ def search_web(query: str) -> str:
     )
     data = response.json()
     
-    # Store the data in session_state for the UI to pick up after invoke()
-    st.session_state.search_debug.append({"query": query, "data": data})
+    # 🛠️ Robust Thread-Safe State Handling
+    # Check if we are in a context where session_state is accessible
+    try:
+        if "search_debug" not in st.session_state:
+            st.session_state.search_debug = []
+        st.session_state.search_debug.append({"query": query, "data": data})
+    except Exception:
+        # If session_state is totally unreachable in this thread, 
+        # we skip the debug save to prevent the app from crashing.
+        pass
         
     results = [f"Source: {res.get('url')}\nContent: {res.get('content')}" for res in data.get("results", [])]
     return "\n\n".join(results)
