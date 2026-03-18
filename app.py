@@ -31,6 +31,20 @@ def get_agent():
             json={"api_key": TAVILY_KEY, "query": query}
         )
         data = response.json()
+        
+        # ==========================================
+        # 🐛 DEBUG INJECTION
+        # ==========================================
+        # 1. Print to your VS Code terminal
+        print(f"\n--- TAVILY SEARCH: {query} ---")
+        print(data)
+        
+        # 2. Show the raw JSON in the Streamlit Sidebar
+        with st.sidebar:
+            with st.expander(f"🔍 Raw Search Data: {query}", expanded=False):
+                st.json(data) # This automatically formats JSON beautifully!
+        # ==========================================
+
         results = [f"Source: {res.get('url')}\nContent: {res.get('content')}" for res in data.get("results", [])]
         return "\n\n".join(results)
 
