@@ -8,8 +8,8 @@ from langchain.tools import tool
 # ==========================================
 # 1. SETUP (Replace with your actual keys)
 # ==========================================
-OPENAI_KEY = ""
-TAVILY_KEY = ""
+OPENAI_KEY = st.secrets.get("OPENAI_KEY", "")
+TAVILY_KEY = st.secrets.get("TAVILY_KEY", "")
 
 os.environ["OPENAI_API_KEY"] = OPENAI_KEY
 
