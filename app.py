@@ -29,9 +29,11 @@ def search_web(query: str) -> str:
     )
     data = response.json()
     
-    # 🐛 DEBUG INJECTION: Draw an expander right in the main chat!
-    with st.expander(f"🔍 Debug: Raw Search Data for '{query}'", expanded=False):
-        st.json(data)
+    # 🐛 DEBUG INJECTION: Print to the server logs instead of the UI
+    print(f"\n========== TAVILY SEARCH RAW DATA ==========")
+    print(f"QUERY: {query}")
+    print(data)
+    print("============================================\n")
         
     results = [f"Source: {res.get('url')}\nContent: {res.get('content')}" for res in data.get("results", [])]
     return "\n\n".join(results)
